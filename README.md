@@ -21,7 +21,7 @@ Ubuntu 16.04, 18.04, 20.04, 22.04
 CentOS 7
 
 * WSS客户端配置信息保存在：
-`cat /usr/local/etc/v2ray/client.json`
+`cat /usr/local/etc/v2ray/client.txt`
 
 * Shadowsocks客户端配置信息：
 `cat /etc/shadowsocks/config.json`
@@ -33,7 +33,12 @@ CentOS 7
 `cat /etc/hysteria/hyclient.json`
 
 * Https正向代理客户端配置信息保存在：
-`cat /etc/caddy/https.json`
+`cat /etc/caddy/https.txt`
+
+变更说明：
+- 脚本统一为 Bash，增加严格模式和错误处理，提升稳健性。
+- 客户端信息文件从“.json”更名为“.txt”，内容为可读文本与链接。
+- tcp-window.sh 采用安全的 drop-in 配置，执行前有确认提示，不再强制重启。
 
 卸载方法如下：
 https://1024.day/d/1296

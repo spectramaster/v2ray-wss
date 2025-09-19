@@ -2,6 +2,9 @@
 # Hysteria2 Installation Script
 # Author: https://1024.day
 
+set -Eeuo pipefail
+trap 'echo "[ERROR] Command failed at line $LINENO" >&2' ERR
+
 GREEN="\033[32m"
 RED="\033[31m"
 YELLOW="\033[33m"
@@ -38,6 +41,12 @@ detect_os() {
         DETECTED_OS=$(uname -s)
         OS_VERSION=$(uname -r)
     fi
+}
+
+# 校验域名
+validate_domain() {
+    local d="$1"
+    [[ "$d" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$ ]]
 }
 
 # 安装必要的包
@@ -93,6 +102,20 @@ generate_password() {
     fi
 }
 
+# 端口占用检测
+is_port_in_use() {
+    local port="$1"
+    if command -v ss &>/dev/null; then
+        ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE ":${port}$"
+    elif command -v netstat &>/dev/null; then
+        netstat -lnt 2>/dev/null | awk '{print $4}' | grep -qE ":${port}$"
+    elif command -v lsof &>/dev/null; then
+        lsof -iTCP -sTCP:LISTEN -nP 2>/dev/null | grep -q ":${port}"
+    else
+        return 1
+    fi
+}
+
 # 获取端口
 get_port() {
     read -t 15 -p "回车或等待15秒为随机端口，或者自定义端口请输入(1-65535): " SERVER_PORT
@@ -106,6 +129,10 @@ get_port() {
     
     if ! [[ "$SERVER_PORT" =~ ^[0-9]+$ ]] || [ "$SERVER_PORT" -lt 1 ] || [ "$SERVER_PORT" -gt 65535 ]; then
         echo "错误: 端口必须是 1-65535 之间的数字"
+        exit 1
+    fi
+    if is_port_in_use "$SERVER_PORT"; then
+        echo "错误: 端口 ${SERVER_PORT} 已被占用"
         exit 1
     fi
 }
@@ -159,6 +186,12 @@ install_hysteria2() {
     chmod 600 /etc/hysteria/server.key
     chmod 644 /etc/hysteria/server.crt
     echo "创建 Hysteria2 配置文件..."
+    # 读取自定义 SNI
+    read -t 30 -p "回车或等待30秒为默认SNI bing.com，或者自定义SNI请输入：" SNI || true
+    if [[ -z "${SNI:-}" ]]; then SNI="bing.com"; fi
+    if ! validate_domain "$SNI"; then
+        echo "警告: SNI 格式无效，使用默认 bing.com"; SNI="bing.com"
+    fi
     cat > /etc/hysteria/config.yaml << EOF
 listen: :$SERVER_PORT
 
@@ -187,6 +220,11 @@ EOF
         systemctl enable hysteria-server.service
         systemctl restart hysteria-server.service
         sleep 2
+        if ! systemctl is-active --quiet hysteria-server.service; then
+            echo "错误: Hysteria2 服务启动失败，最近日志："
+            journalctl -u hysteria-server.service --no-pager -n 50 || true
+            exit 1
+        fi
     else
         echo "请手动启动 Hysteria2 服务"
     fi
@@ -195,7 +233,7 @@ EOF
 "server": "$(get_server_ip):${SERVER_PORT}",
 "auth": "${HYSTERIA_PASSWORD}",
 "tls": {
-  "sni": "bing.com",
+  "sni": "$SNI",
   "insecure": true
 },
 "quic": {
@@ -206,7 +244,6 @@ EOF
 }
 }
 EOF
-    rm -f tcp-wss.sh hy2.sh
     clear
 }
 
@@ -233,7 +270,7 @@ check_service_status() {
 show_client_config() {
     local server_ip
     server_ip=$(get_server_ip)
-    local connection_link="${HYSTERIA_PASSWORD}@${server_ip}:${SERVER_PORT}/?insecure=1&sni=bing.com#1024-Hysteria2"
+    local connection_link="${HYSTERIA_PASSWORD}@${server_ip}:${SERVER_PORT}/?insecure=1&sni=${SNI:-bing.com}#1024-Hysteria2"
 
     echo
     echo -e "${GREEN}===== Hysteria2 安装完成 =====${RESET}"
@@ -242,7 +279,7 @@ show_client_config() {
     echo -e "服务器地址: ${YELLOW}${server_ip}${RESET}"
     echo -e "端口: ${YELLOW}${SERVER_PORT}${RESET}"
     echo -e "密码: ${YELLOW}${HYSTERIA_PASSWORD}${RESET}"
-    echo -e "SNI: ${YELLOW}bing.com${RESET}"
+    echo -e "SNI: ${YELLOW}${SNI:-bing.com}${RESET}"
     echo -e "传输协议: ${YELLOW}QUIC over TLS${RESET}"
     echo -e "跳过证书验证: ${YELLOW}true${RESET}"
     echo -e "${CYAN}==================================${RESET}"

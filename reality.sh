@@ -1,6 +1,9 @@
 #!/bin/bash
 # forum: https://1024.day
 
+set -Eeuo pipefail
+trap 'echo "[ERROR] Command failed at line $LINENO" >&2' ERR
+
 # 确保以root用户运行
 if [[ $EUID -ne 0 ]]; then
     clear

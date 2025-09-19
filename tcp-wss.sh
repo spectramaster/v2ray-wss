@@ -1,65 +1,152 @@
-##!/bin/sh
+#!/usr/bin/env bash
 # forum: https://1024.day
 
-if [[ $EUID -ne 0 ]]; then
-    clear
+set -Eeuo pipefail
+trap 'echo "[ERROR] Command failed at line $LINENO" >&2' ERR
+
+if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
     echo "Error: This script must be run as root!" 1>&2
     exit 1
 fi
 
-timedatectl set-timezone Asia/Shanghai
-v2path=$(cat /dev/urandom | head -1 | md5sum | head -c 6)
-v2uuid=$(cat /proc/sys/kernel/random/uuid)
-ssport=$(shuf -i 2000-65000 -n 1)
+# ---------- Helpers ----------
+command_exists() { command -v "$1" >/dev/null 2>&1; }
 
-getIP(){
-    local serverIP=
-    serverIP=$(curl -s -4 http://www.cloudflare.com/cdn-cgi/trace | grep "ip" | awk -F "[=]" '{print $2}')
-    if [[ -z "${serverIP}" ]]; then
-        serverIP=$(curl -s -6 http://www.cloudflare.com/cdn-cgi/trace | grep "ip" | awk -F "[=]" '{print $2}')
+get_server_ip() {
+    local ip=""
+    local sources_v4=(
+        "http://www.cloudflare.com/cdn-cgi/trace"
+        "https://api.ipify.org"
+        "https://ipinfo.io/ip"
+        "https://ipv4.icanhazip.com/"
+        "https://checkip.amazonaws.com"
+    )
+    for src in "${sources_v4[@]}"; do
+        if [[ "$src" == *cloudflare* ]]; then
+            ip=$(curl -fsS4 --connect-timeout 10 --max-time 15 "$src" | awk -F'=' '/^ip=/{print $2}' | tr -d '\r\n' || true)
+        else
+            ip=$(curl -fsS4 --connect-timeout 10 --max-time 15 "$src" | tr -d '\r\n' || true)
+        fi
+        [[ -n "$ip" ]] && break || true
+    done
+    if [[ -z "$ip" ]]; then
+        ip=$(curl -fsS6 --connect-timeout 10 --max-time 15 "http://www.cloudflare.com/cdn-cgi/trace" | awk -F'=' '/^ip=/{print $2}' | tr -d '\r\n' || true)
     fi
-    echo "${serverIP}"
+    echo "$ip"
 }
 
-install_precheck(){
-    echo "====输入已经DNS解析好的域名===="
-    read domain
-
-    read -t 15 -p "回车或等待15秒为默认端口443，或者自定义端口请输入(1-65535)："  getPort
-    if [ -z $getPort ];then
-        getPort=443
-    fi
-    
-    if [ -f "/usr/bin/apt-get" ]; then
-        apt-get update -y && apt-get upgrade -y
-        apt-get install -y net-tools curl
+is_port_in_use() {
+    local port="$1"
+    if command_exists ss; then
+        ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE ":${port}$"
+    elif command_exists netstat; then
+        netstat -lnt 2>/dev/null | awk '{print $4}' | grep -qE ":${port}$"
+    elif command_exists lsof; then
+        lsof -iTCP -sTCP:LISTEN -nP 2>/dev/null | grep -q ":${port}"
     else
-        yum update -y && yum upgrade -y
-        yum install -y epel-release
-        yum install -y net-tools curl
+        return 1
+    fi
+}
+
+choose_free_port() {
+    local try=0 port
+    while (( try < 30 )); do
+        port=$(shuf -i 2000-65000 -n 1)
+        if ! is_port_in_use "$port"; then
+            echo "$port"; return 0
+        fi
+        ((try++))
+    done
+    echo 18080
+}
+
+validate_domain() {
+    local d="$1"
+    [[ "$d" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$ ]]
+}
+
+base64_noline() {
+    if base64 --help 2>&1 | grep -q '\-w, \--wrap'; then
+        base64 -w 0
+    else
+        base64 | tr -d '\n'
+    fi
+}
+
+rand_path() {
+    if command_exists openssl; then
+        openssl rand -hex 8
+    else
+        head -c 16 /dev/urandom | md5sum | head -c 12
+    fi
+}
+
+gen_uuid() {
+    if [[ -r /proc/sys/kernel/random/uuid ]]; then
+        cat /proc/sys/kernel/random/uuid
+    elif command_exists uuidgen; then
+        uuidgen
+    else
+        date +%s%N | md5sum | awk '{print $1"-0000-4000-8000-"substr($1,1,12)}'
+    fi
+}
+
+# ---------- Globals ----------
+v2path="$(rand_path)"
+v2uuid="$(gen_uuid)"
+V2_UPSTREAM_PORT="$(choose_free_port)"
+
+install_precheck(){
+    echo "==== 输入已经 DNS 解析好的域名 ===="
+    read -r domain
+    if [[ -z "$domain" ]] || ! validate_domain "$domain"; then
+        echo "域名格式无效" >&2; exit 1
     fi
 
-    sleep 3
-    isPort=`netstat -ntlp| grep -E ':80 |:443 '`
-    if [ "$isPort" != "" ];then
-        clear
+    read -r -t 15 -p "回车或等待15秒为默认端口443，或者自定义端口请输入(1-65535)："  getPort || true
+    if [[ -z "${getPort:-}" ]]; then getPort=443; fi
+    if ! [[ "$getPort" =~ ^[0-9]+$ ]] || (( getPort < 1 || getPort > 65535 )); then
+        echo "端口无效" >&2; exit 1
+    fi
+
+    # Install minimal deps
+    if command_exists apt-get; then
+        apt-get update -y
+        apt-get install -y net-tools curl nginx cron socat
+    elif command_exists dnf; then
+        dnf makecache -y || true
+        dnf install -y net-tools curl nginx cronie socat
+    else
+        yum makecache -y || true
+        yum install -y epel-release || true
+        yum install -y net-tools curl nginx cronie socat
+    fi
+
+    # Check 80 and target port
+    sleep 1
+    local conflicts
+    conflicts=$(netstat -ntlp 2>/dev/null | grep -E ":80 |:${getPort} ") || true
+    if [[ -n "$conflicts" ]]; then
         echo " ================================================== "
-        echo " 80或443端口被占用，请先释放端口再运行此脚本"
+        echo " 80或目标端口(${getPort})被占用，请先释放端口再运行此脚本"
         echo
         echo " 端口占用信息如下："
-        echo $isPort
+        echo "$conflicts"
         echo " ================================================== "
         exit 1
+    fi
+
+    # Verify domain resolves to this server (acme standalone requires direct mapping)
+    SERVER_IP=$(get_server_ip)
+    RESOLVED_IPS=$(getent hosts "$domain" 2>/dev/null | awk '{print $1}' | tr '\n' ' ')
+    if [[ -z "$RESOLVED_IPS" ]]; then
+        echo "警告：无法解析域名 $domain 的 A 记录" >&2
+    elif ! echo " $RESOLVED_IPS " | grep -q " $SERVER_IP "; then
+        echo "警告：域名解析的IP($RESOLVED_IPS)与本机IP($SERVER_IP)不匹配，acme standalone 可能失败" >&2
     fi
 }
 
 install_nginx(){
-    if [ -f "/usr/bin/apt-get" ];then
-        apt-get install -y nginx cron socat
-    else
-        yum install -y nginx cronie socat
-    fi
-
 cat >/etc/nginx/nginx.conf<<EOF
 pid /var/run/nginx.pid;
 worker_processes auto;
@@ -67,7 +154,6 @@ worker_rlimit_nofile 51200;
 events {
     worker_connections 1024;
     multi_accept on;
-    use epoll;
 }
 http {
     server_tokens off;
@@ -94,18 +180,20 @@ http {
         listen $getPort ssl http2;
         listen [::]:$getPort ssl http2;
         server_name $domain;
-        ssl_protocols TLSv1.1 TLSv1.2 TLSv1.3;
-        ssl_ciphers ECDHE-RSA-AES128-GCM-SHA256:HIGH:!aNULL:!MD5:!RC4:!DHE;
-        ssl_prefer_server_ciphers on;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256:TLS_CHACHA20_POLY1305_SHA256:
+                     ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:
+                     ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+        ssl_prefer_server_ciphers off;
         ssl_certificate /etc/letsencrypt/live/$domain/fullchain.pem;
-        ssl_certificate_key /etc/letsencrypt/live/$domain/privkey.pem;        
+        ssl_certificate_key /etc/letsencrypt/live/$domain/privkey.pem;
         location / {
             default_type text/plain;
             return 200 "Hello World !";
-        }        
+        }
         location /$v2path {
             proxy_redirect off;
-            proxy_pass http://127.0.0.1:8080;
+            proxy_pass http://127.0.0.1:$V2_UPSTREAM_PORT;
             proxy_http_version 1.1;
             proxy_set_header Upgrade \$http_upgrade;
             proxy_set_header Connection "upgrade";
@@ -114,66 +202,62 @@ http {
     }
 }
 EOF
+    nginx -t
+    systemctl enable nginx.service
 }
 
 acme_ssl(){    
-    curl https://get.acme.sh | sh -s email=my@example.com
-    mkdir -p /etc/letsencrypt/live/$domain
-    ~/.acme.sh/acme.sh --issue -d $domain --standalone --keylength ec-256 --pre-hook "systemctl stop nginx" --post-hook "~/.acme.sh/acme.sh --installcert -d $domain --ecc --fullchain-file /etc/letsencrypt/live/$domain/fullchain.pem --key-file /etc/letsencrypt/live/$domain/privkey.pem --reloadcmd \"systemctl start nginx\""
+    curl -fsSL https://get.acme.sh | sh -s email=my@example.com
+    mkdir -p "/etc/letsencrypt/live/$domain"
+    # Ensure nginx is stopped for standalone
+    systemctl stop nginx || true
+    ~/.acme.sh/acme.sh --issue -d "$domain" --standalone -k ec-256
+    ~/.acme.sh/acme.sh --installcert -d "$domain" --ecc \
+        --fullchain-file "/etc/letsencrypt/live/$domain/fullchain.pem" \
+        --key-file "/etc/letsencrypt/live/$domain/privkey.pem"
 }
 
 install_v2ray(){    
-    bash <(curl -L https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh)
+    mkdir -p /usr/local/etc/v2ray
+    curl -fsSL https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh | bash
     
 cat >/usr/local/etc/v2ray/config.json<<EOF
 {
+  "log": { "loglevel": "warning" },
   "inbounds": [
     {
-      "port": 8080,
+      "port": $V2_UPSTREAM_PORT,
       "protocol": "vmess",
-      "settings": {
-        "clients": [
-          {
-            "id": "$v2uuid"
-          }
-        ]
-      },
+      "settings": { "clients": [ { "id": "$v2uuid" } ] },
       "streamSettings": {
         "network": "ws",
-        "wsSettings": {
-        "path": "/$v2path"
-        }
+        "security": "none",
+        "wsSettings": { "path": "/$v2path" }
       }
     }
   ],
-  "outbounds": [
-    {
-      "protocol": "freedom",
-      "settings": {}
-    }
-  ]
+  "outbounds": [ { "protocol": "freedom", "settings": {} } ]
 }
 EOF
 
-    systemctl enable v2ray.service && systemctl restart v2ray.service && systemctl restart nginx.service
-    rm -f tcp-wss.sh install-release.sh
+    systemctl daemon-reload
+    systemctl enable v2ray.service
+    systemctl restart v2ray.service
+    systemctl restart nginx.service
 
-cat >/usr/local/etc/v2ray/client.json<<EOF
-{
-===========配置参数=============
+cat >/usr/local/etc/v2ray/client.txt<<EOF
+=========== 配置参数 =============
 协议：VMess
 地址：${domain}
 端口：${getPort}
 UUID：${v2uuid}
-加密方式：aes-128-gcm
+加密方式：auto
 传输协议：ws
 路径：/${v2path}
 底层传输：tls
-注意：8080是免流端口不需要打开tls
-}
+注意：回源端口为 ${V2_UPSTREAM_PORT}
+=================================
 EOF
-
-    clear
 }
 
 install_ssrust(){
@@ -193,22 +277,24 @@ install_https(){
 }
 
 client_v2ray(){
-    wslink=$(echo -n "{\"port\":${getPort},\"ps\":\"1024-wss\",\"tls\":\"tls\",\"id\":\"${v2uuid}\",\"aid\":0,\"v\":2,\"host\":\"${domain}\",\"type\":\"none\",\"path\":\"/${v2path}\",\"net\":\"ws\",\"add\":\"${domain}\",\"allowInsecure\":0,\"method\":\"none\",\"peer\":\"${domain}\",\"sni\":\"${domain}\"}" | base64 -w 0)
+    local link_json
+    link_json=$(printf '{"port":%s,"ps":"1024-wss","tls":"tls","id":"%s","aid":0,"v":2,"host":"%s","type":"none","path":"/%s","net":"ws","add":"%s","allowInsecure":0,"method":"auto","peer":"%s","sni":"%s"}' \
+        "$getPort" "$v2uuid" "$domain" "$v2path" "$domain" "$domain" "$domain")
+    wslink=$(echo -n "$link_json" | base64_noline)
 
     echo
     echo "安装已经完成"
     echo
-    echo "===========v2ray配置参数============"
+    echo "=========== v2ray 配置参数 ============"
     echo "协议：VMess"
     echo "地址：${domain}"
     echo "端口：${getPort}"
     echo "UUID：${v2uuid}"
-    echo "加密方式：aes-128-gcm"
+    echo "加密方式：auto"
     echo "传输协议：ws"
     echo "路径：/${v2path}"
     echo "底层传输：tls"
-    echo "注意：8080是免流端口不需要打开tls"
-    echo "===================================="
+    echo "======================================"
     echo "vmess://${wslink}"
     echo
 }
@@ -228,7 +314,7 @@ start_menu(){
     echo " 5. 安装 Https正向代理"
     echo " 0. 退出脚本"
     echo
-    read -p "请输入数字:" num
+    read -r -p "请输入数字:" num
     case "$num" in
     1)
     install_ssrust
@@ -262,3 +348,4 @@ start_menu(){
 }
 
 start_menu
+
