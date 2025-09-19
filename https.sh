@@ -101,7 +101,7 @@ if [[ ! "${confirm,,}" =~ ^y ]]; then
 fi
 
 step "下载并安装 Caddy..."
-curl -fSL https://github.com/yeahwu/v2ray-wss/releases/download/v-monthly/caddy-v-monthly.tar.gz | tar -xz -C /usr/local/
+curl -fSL https://github.com/spectramaster/v2ray-wss/releases/download/v-monthly/caddy-v-monthly.tar.gz | tar -xz -C /usr/local/
 chmod +x /usr/local/caddy
 ok "Caddy 安装完成"
 

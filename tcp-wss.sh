@@ -261,19 +261,19 @@ EOF
 }
 
 install_ssrust(){
-    wget https://raw.githubusercontent.com/yeahwu/v2ray-wss/main/ss-rust.sh && bash ss-rust.sh
+    wget https://raw.githubusercontent.com/spectramaster/v2ray-wss/main/ss-rust.sh && bash ss-rust.sh
 }
 
 install_reality(){
-    wget https://raw.githubusercontent.com/yeahwu/v2ray-wss/main/reality.sh && bash reality.sh
+    wget https://raw.githubusercontent.com/spectramaster/v2ray-wss/main/reality.sh && bash reality.sh
 }
 
 install_hy2(){
-    wget https://raw.githubusercontent.com/yeahwu/v2ray-wss/main/hy2.sh && bash hy2.sh
+    wget https://raw.githubusercontent.com/spectramaster/v2ray-wss/main/hy2.sh && bash hy2.sh
 }
 
 install_https(){
-    wget https://raw.githubusercontent.com/yeahwu/v2ray-wss/main/https.sh && bash https.sh
+    wget https://raw.githubusercontent.com/spectramaster/v2ray-wss/main/https.sh && bash https.sh
 }
 
 client_v2ray(){
@@ -348,4 +348,3 @@ start_menu(){
 }
 
 start_menu
-

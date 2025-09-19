@@ -6,32 +6,32 @@
 
 - 主菜单（推荐，一键安装/管理多种代理）：
 ```
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/yeahwu/v2ray-wss/main/tcp-wss.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/spectramaster/v2ray-wss/main/tcp-wss.sh)"
 ```
 
 - 单独安装 V2Ray + WebSocket（免 TLS 直连版）：
 ```
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/yeahwu/v2ray-wss/main/ws.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/spectramaster/v2ray-wss/main/ws.sh)"
 ```
 
 - 单独安装 Reality：
 ```
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/yeahwu/v2ray-wss/main/reality.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/spectramaster/v2ray-wss/main/reality.sh)"
 ```
 
 - 单独安装 Hysteria2：
 ```
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/yeahwu/v2ray-wss/main/hy2.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/spectramaster/v2ray-wss/main/hy2.sh)"
 ```
 
 - 单独安装 HTTPS 正向代理（Caddy）：
 ```
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/yeahwu/v2ray-wss/main/https.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/spectramaster/v2ray-wss/main/https.sh)"
 ```
 
 - 应用 TCP/系统优化（需确认）：
 ```
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/yeahwu/v2ray-wss/main/tcp-window.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/spectramaster/v2ray-wss/main/tcp-window.sh)"
 ```
 
 **便宜VPS推荐：** https://hostalk.net/deals.html
