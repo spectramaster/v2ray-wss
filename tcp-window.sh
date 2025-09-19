@@ -9,9 +9,19 @@ if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
     exit 1
 fi
 
+GREEN='\033[32m'; YELLOW='\033[33m'; BLUE='\033[34m'; BOLD='\033[1m'; RESET='\033[0m'
+banner() {
+    clear
+    echo -e "${BLUE}${BOLD}==============================================${RESET}"
+    echo -e "${BLUE}${BOLD}              系统网络参数调优               ${RESET}"
+    echo -e "${BLUE}${BOLD}==============================================${RESET}"
+}
+
+banner
+echo -e "将应用适度的文件句柄/进程数限制与 TCP/BBR 优化。\n"
 read -r -p "确认应用内核与系统调优设置？(y/N): " CONFIRM
 if [[ ! "${CONFIRM,,}" =~ ^y ]]; then
-    echo "已取消"
+    echo -e "${YELLOW}已取消${RESET}"
     exit 0
 fi
 
@@ -66,4 +76,5 @@ EOF
 systemctl daemon-reload || true
 sysctl -p "$TUNE_FILE" || true
 
-echo "已应用系统调优设置。建议重启以完全生效（尤其是 systemd limits）。"
+echo -e "${GREEN}已应用系统调优设置${RESET}"
+echo "建议重启以完全生效（尤其是 systemd limits）。"

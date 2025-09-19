@@ -9,87 +9,32 @@ if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
     exit 1
 fi
 
-# ---------- Helpers ----------
-command_exists() { command -v "$1" >/dev/null 2>&1; }
+# ---------- UI & Helpers ----------
+# Load common helpers
+if [[ -z "${COMMON_LOADED:-}" ]]; then
+  if [[ -f "$(dirname "$0")/scripts/lib/common.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$(dirname "$0")/scripts/lib/common.sh"
+  else
+    # shellcheck disable=SC1090
+    source <(curl -fsSL https://raw.githubusercontent.com/spectramaster/v2ray-wss/main/scripts/lib/common.sh)
+  fi
+fi
+MAGENTA='\033[35m'
 
-get_server_ip() {
-    local ip=""
-    local sources_v4=(
-        "http://www.cloudflare.com/cdn-cgi/trace"
-        "https://api.ipify.org"
-        "https://ipinfo.io/ip"
-        "https://ipv4.icanhazip.com/"
-        "https://checkip.amazonaws.com"
-    )
-    for src in "${sources_v4[@]}"; do
-        if [[ "$src" == *cloudflare* ]]; then
-            ip=$(curl -fsS4 --connect-timeout 10 --max-time 15 "$src" | awk -F'=' '/^ip=/{print $2}' | tr -d '\r\n' || true)
-        else
-            ip=$(curl -fsS4 --connect-timeout 10 --max-time 15 "$src" | tr -d '\r\n' || true)
-        fi
-        [[ -n "$ip" ]] && break || true
-    done
-    if [[ -z "$ip" ]]; then
-        ip=$(curl -fsS6 --connect-timeout 10 --max-time 15 "http://www.cloudflare.com/cdn-cgi/trace" | awk -F'=' '/^ip=/{print $2}' | tr -d '\r\n' || true)
-    fi
-    echo "$ip"
+banner() {
+    clear
+    echo -e "${MAGENTA}${BOLD}==============================================${RESET}"
+    echo -e "${MAGENTA}${BOLD}      多协议网络代理 一键安装管理面板      ${RESET}"
+    echo -e "${MAGENTA}${BOLD}==============================================${RESET}"
+    echo -e "${BLUE}  支持：Shadowsocks-rust / V2Ray+WS+TLS / Reality / Hysteria2 / HTTPS  ${RESET}"
 }
 
-is_port_in_use() {
-    local port="$1"
-    if command_exists ss; then
-        ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE ":${port}$"
-    elif command_exists netstat; then
-        netstat -lnt 2>/dev/null | awk '{print $4}' | grep -qE ":${port}$"
-    elif command_exists lsof; then
-        lsof -iTCP -sTCP:LISTEN -nP 2>/dev/null | grep -q ":${port}"
-    else
-        return 1
-    fi
-}
-
-choose_free_port() {
-    local try=0 port
-    while (( try < 30 )); do
-        port=$(shuf -i 2000-65000 -n 1)
-        if ! is_port_in_use "$port"; then
-            echo "$port"; return 0
-        fi
-        ((try++))
-    done
-    echo 18080
-}
-
-validate_domain() {
-    local d="$1"
-    [[ "$d" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$ ]]
-}
-
-base64_noline() {
-    if base64 --help 2>&1 | grep -q '\-w, \--wrap'; then
-        base64 -w 0
-    else
-        base64 | tr -d '\n'
-    fi
-}
-
-rand_path() {
-    if command_exists openssl; then
-        openssl rand -hex 8
-    else
-        head -c 16 /dev/urandom | md5sum | head -c 12
-    fi
-}
-
-gen_uuid() {
-    if [[ -r /proc/sys/kernel/random/uuid ]]; then
-        cat /proc/sys/kernel/random/uuid
-    elif command_exists uuidgen; then
-        uuidgen
-    else
-        date +%s%N | md5sum | awk '{print $1"-0000-4000-8000-"substr($1,1,12)}'
-    fi
-}
+get_server_ip() { command get_server_ip; }
+validate_domain() { command validate_domain "$1"; }
+rand_path() { command rand_path; }
+gen_uuid() { command gen_uuid; }
+choose_free_port() { command choose_free_port; }
 
 # ---------- Globals ----------
 v2path="$(rand_path)"
@@ -98,12 +43,20 @@ V2_UPSTREAM_PORT="$(choose_free_port)"
 
 install_precheck(){
     echo "==== 输入已经 DNS 解析好的域名 ===="
-    read -r domain
+    if [[ -n "${DOMAIN:-}" ]]; then
+      domain="$DOMAIN"; echo "$domain";
+    else
+      read -r domain
+    fi
     if [[ -z "$domain" ]] || ! validate_domain "$domain"; then
         echo "域名格式无效" >&2; exit 1
     fi
 
-    read -r -t 15 -p "回车或等待15秒为默认端口443，或者自定义端口请输入(1-65535)："  getPort || true
+    if [[ -n "${PORT:-}" ]]; then
+      getPort="$PORT"
+    else
+      read -r -t 15 -p "回车或等待15秒为默认端口443，或者自定义端口请输入(1-65535)："  getPort || true
+    fi
     if [[ -z "${getPort:-}" ]]; then getPort=443; fi
     if ! [[ "$getPort" =~ ^[0-9]+$ ]] || (( getPort < 1 || getPort > 65535 )); then
         echo "端口无效" >&2; exit 1
@@ -185,6 +138,12 @@ http {
                      ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:
                      ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
         ssl_prefer_server_ciphers off;
+        ssl_session_cache shared:SSL:10m;
+        ssl_session_timeout 10m;
+        ssl_stapling on;
+        ssl_stapling_verify on;
+        resolver 1.1.1.1 1.0.0.1 8.8.8.8 valid=300s;
+        resolver_timeout 5s;
         ssl_certificate /etc/letsencrypt/live/$domain/fullchain.pem;
         ssl_certificate_key /etc/letsencrypt/live/$domain/privkey.pem;
         location / {
@@ -198,6 +157,10 @@ http {
             proxy_set_header Upgrade \$http_upgrade;
             proxy_set_header Connection "upgrade";
             proxy_set_header Host \$http_host;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$scheme;
+            proxy_read_timeout 300s;
+            proxy_send_timeout 300s;
         }
     }
 }
@@ -219,7 +182,8 @@ acme_ssl(){
 
 install_v2ray(){    
     mkdir -p /usr/local/etc/v2ray
-    curl -fsSL https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh | bash
+    local url="${V2RAY_INSTALL_URL:-https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh}"
+    curl -fsSL "$url" | bash
     
 cat >/usr/local/etc/v2ray/config.json<<EOF
 {
@@ -242,7 +206,11 @@ EOF
 
     systemctl daemon-reload
     systemctl enable v2ray.service
+    if ! test_v2ray_config "/usr/local/etc/v2ray/config.json"; then
+        echo -e "${WARN} v2ray 配置验证失败，尝试继续" >&2
+    fi
     systemctl restart v2ray.service
+    ensure_service_active v2ray.service "v2ray" || true
     systemctl restart nginx.service
 
 cat >/usr/local/etc/v2ray/client.txt<<EOF
@@ -300,21 +268,17 @@ client_v2ray(){
 }
 
 start_menu(){
-    clear
-    echo " ================================================== "
-    echo " 论坛：https://1024.day                              "
-    echo " 介绍：一键安装SS-Rust，v2ray+wss，Reality或Hysteria2    "
-    echo " 系统：Ubuntu、Debian、CentOS                        "
-    echo " ================================================== "
+    banner
     echo
-    echo " 1. 安装 Shadowsocks-rust(用于落地)"
-    echo " 2. 安装 v2ray+ws+tls"
-    echo " 3. 安装 Reality"
-    echo " 4. 安装 Hysteria2"
-    echo " 5. 安装 Https正向代理"
-    echo " 0. 退出脚本"
+    echo -e "${BOLD}请选择要执行的操作：${RESET}"
+    echo -e "  ${CYAN}[1]${RESET} ${BOLD}安装 Shadowsocks-rust${RESET} ${YELLOW}(用于落地)${RESET}"
+    echo -e "  ${CYAN}[2]${RESET} ${BOLD}安装 V2Ray + WS + TLS${RESET}"
+    echo -e "  ${CYAN}[3]${RESET} ${BOLD}安装 Reality${RESET}"
+    echo -e "  ${CYAN}[4]${RESET} ${BOLD}安装 Hysteria2${RESET}"
+    echo -e "  ${CYAN}[5]${RESET} ${BOLD}安装 HTTPS 正向代理${RESET}"
+    echo -e "  ${CYAN}[0]${RESET} 退出"
     echo
-    read -r -p "请输入数字:" num
+    read -r -p "请输入数字并回车: " num
     case "$num" in
     1)
     install_ssrust

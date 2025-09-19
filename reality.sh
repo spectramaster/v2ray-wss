@@ -13,6 +13,15 @@ fi
 
 # 全局变量定义
 SERVER_IP=""
+# UI Colors
+GREEN='\033[32m'; RED='\033[31m'; YELLOW='\033[33m'; CYAN='\033[36m'; BLUE='\033[34m'; BOLD='\033[1m'; RESET='\033[0m'
+
+banner() {
+    clear
+    echo -e "${BLUE}${BOLD}==============================================${RESET}"
+    echo -e "${BLUE}${BOLD}                Reality 一键安装               ${RESET}"
+    echo -e "${BLUE}${BOLD}==============================================${RESET}"
+}
 LOG_FILE="/var/log/reality_install.log"
 BACKUP_DIR="/tmp/reality_backup_$(date +%s)"
 
@@ -667,10 +676,9 @@ display_xray_status() {
 
 # 显示客户端配置 - 完全干净版本，无日志输出
 display_client_config() {
-    echo
-    display_green "安装已经完成"
-    echo
-    display_green "=========== Reality配置参数 ==========="
+    banner
+    echo -e "${GREEN}安装已经完成${RESET}\n"
+    echo -e "${BOLD}=========== Reality 配置参数 ============${RESET}"
     echo "代理模式：vless"
     echo "地址：$SERVER_IP"
     echo "端口：$PORT_NUMBER"
@@ -681,14 +689,14 @@ display_client_config() {
     echo "底层传输：reality"
     echo "SNI：$SERVER_SNI"
     echo "shortIds：88"
-    display_green "========================================"
+    echo -e "${BOLD}========================================${RESET}"
     echo
-    display_green "客户端连接链接："
+    echo "客户端连接链接："
     echo "vless://$UUID@$SERVER_IP:$PORT_NUMBER?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$SERVER_SNI&fp=chrome&pbk=$RE_PUBLIC_KEY&sid=88&type=tcp&headerType=none#1024-reality"
     echo
-    display_green "配置信息已保存到: /usr/local/etc/xray/reclient.json"
+    echo "配置信息已保存到: /usr/local/etc/xray/reclient.json"
     if [[ -n "$LOG_FILE" ]]; then
-        display_green "安装日志文件位置: $LOG_FILE"
+        echo "安装日志文件位置: $LOG_FILE"
     fi
 }
 
@@ -737,6 +745,7 @@ get_user_input() {
 
 # 主函数
 main() {
+    banner
     log_info "开始Reality安装和配置..."
     log_info "脚本版本: Reality Plus $(date)"
     

@@ -2,6 +2,9 @@
 # Shadowsocks Rust Installation Script
 # Author: https://1024.day
 
+set -Eeuo pipefail
+trap 'echo "[ERROR] Command failed at line $LINENO" >&2' ERR
+
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -10,6 +13,19 @@ BLUE='\033[0;34m'
 PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 PLAIN='\033[0m'
+
+is_port_in_use() {
+    local port="$1"
+    if command -v ss &>/dev/null; then
+        ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE ":${port}$"
+    elif command -v netstat &>/dev/null; then
+        netstat -lnt 2>/dev/null | awk '{print $4}' | grep -qE ":${port}$"
+    elif command -v lsof &>/dev/null; then
+        lsof -iTCP -sTCP:LISTEN -nP 2>/dev/null | grep -q ":${port}"
+    else
+        return 1
+    fi
+}
 
 # Root权限检查
 check_root() {
@@ -30,11 +46,19 @@ generate_credentials() {
 
     echo -e "${YELLOW}请输入端口号 [1-65535]${PLAIN}"
     echo -e "${YELLOW}默认: 随机端口 (15秒后自动选择随机端口)${PLAIN}"
-    read -t 15 -p "> " SS_PORT
+    if [[ -n "${SS_PORT:-}" ]]; then
+        echo "> $SS_PORT"
+    else
+        read -t 15 -p "> " SS_PORT
+    fi
     if [[ -z "$SS_PORT" ]]; then
         SS_PORT=$(shuf -i 10000-65000 -n 1)
     elif ! [[ "$SS_PORT" =~ ^[0-9]+$ ]] || [[ "$SS_PORT" -lt 1 ]] || [[ "$SS_PORT" -gt 65535 ]]; then
         echo -e "${YELLOW}输入的端口无效，使用随机端口${PLAIN}"
+        SS_PORT=$(shuf -i 10000-65000 -n 1)
+    fi
+    if is_port_in_use "$SS_PORT"; then
+        echo -e "${YELLOW}端口 ${SS_PORT} 已占用，改用随机端口${PLAIN}"
         SS_PORT=$(shuf -i 10000-65000 -n 1)
     fi
 }
@@ -252,6 +276,20 @@ generate_client_info() {
     echo -e ""
     echo -e "ss://${SS_LINK}"
     echo -e ""
+    # Save client text
+    mkdir -p /etc/shadowsocks
+    cat > /etc/shadowsocks/client.txt << EOF
+=========== 配置参数 =============
+服务器地址: ${IP}
+端口: ${SS_PORT}
+密码: ${SS_PASSWORD}
+加密方式: aes-128-gcm
+协议: tcp+udp
+---------------------------------
+快速导入链接:
+ss://${SS_LINK}
+EOF
+
     echo -e "${GREEN}可使用此URL在客户端快速导入配置${PLAIN}"
     echo -e "==========================================="
 }

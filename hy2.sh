@@ -5,11 +5,13 @@
 set -Eeuo pipefail
 trap 'echo "[ERROR] Command failed at line $LINENO" >&2' ERR
 
-GREEN="\033[32m"
-RED="\033[31m"
-YELLOW="\033[33m"
-CYAN="\033[36m"
-RESET="\033[0m"
+GREEN="\033[32m"; RED="\033[31m"; YELLOW="\033[33m"; CYAN="\033[36m"; BLUE="\033[34m"; BOLD="\033[1m"; RESET="\033[0m"
+banner() {
+    clear
+    echo -e "${BLUE}${BOLD}==============================================${RESET}"
+    echo -e "${BLUE}${BOLD}              Hysteria2 一键安装              ${RESET}"
+    echo -e "${BLUE}${BOLD}==============================================${RESET}"
+}
 
 if [[ $EUID -ne 0 ]]; then
     clear
@@ -118,7 +120,11 @@ is_port_in_use() {
 
 # 获取端口
 get_port() {
-    read -t 15 -p "回车或等待15秒为随机端口，或者自定义端口请输入(1-65535): " SERVER_PORT
+    if [[ -n "${SERVER_PORT:-}" ]]; then
+        echo "使用指定端口: $SERVER_PORT"
+    else
+        read -t 15 -p "回车或等待15秒为随机端口，或者自定义端口请输入(1-65535): " SERVER_PORT
+    fi
     if [ -z "$SERVER_PORT" ]; then
         if command -v shuf &> /dev/null; then
             SERVER_PORT=$(shuf -i 2000-65000 -n 1)
@@ -173,12 +179,30 @@ install_hysteria2() {
     echo "创建配置目录..."
     mkdir -p /etc/hysteria/
     echo "生成SSL证书..."
-    if ! openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) \
-        -keyout /etc/hysteria/server.key \
-        -out /etc/hysteria/server.crt \
-        -subj "/CN=bing.com" -days 36500; then
-        echo "错误: SSL证书生成失败"
-        exit 1
+    if [[ "${HY2_USE_ACME:-0}" == "1" && -n "${DOMAIN:-}" && $(validate_domain "$DOMAIN" && echo ok) == "ok" ]]; then
+        echo "尝试使用 acme.sh 申请证书: $DOMAIN"
+        curl -fsSL https://get.acme.sh | sh -s email=my@example.com
+        mkdir -p /etc/hysteria
+        systemctl stop nginx 2>/dev/null || true
+        ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone -k ec-256 || true
+        ~/.acme.sh/acme.sh --installcert -d "$DOMAIN" --ecc \
+            --fullchain-file /etc/hysteria/server.crt \
+            --key-file /etc/hysteria/server.key || true
+        if [[ ! -s /etc/hysteria/server.crt || ! -s /etc/hysteria/server.key ]]; then
+            echo "acme 签发失败，回退到自签证书"
+            HY2_USE_ACME=0
+        else
+            SNI="$DOMAIN"
+        fi
+    fi
+    if [[ "${HY2_USE_ACME:-0}" != "1" ]]; then
+        if ! openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) \
+            -keyout /etc/hysteria/server.key \
+            -out /etc/hysteria/server.crt \
+            -subj "/CN=${SNI:-bing.com}" -days 36500; then
+            echo "错误: SSL证书生成失败"
+            exit 1
+        fi
     fi
     if id hysteria &> /dev/null; then
         chown hysteria:hysteria /etc/hysteria/server.key /etc/hysteria/server.crt
@@ -187,7 +211,11 @@ install_hysteria2() {
     chmod 644 /etc/hysteria/server.crt
     echo "创建 Hysteria2 配置文件..."
     # 读取自定义 SNI
-    read -t 30 -p "回车或等待30秒为默认SNI bing.com，或者自定义SNI请输入：" SNI || true
+    if [[ -n "${SNI:-}" ]]; then
+        echo "使用 SNI: $SNI"
+    else
+        read -t 30 -p "回车或等待30秒为默认SNI bing.com，或者自定义SNI请输入：" SNI || true
+    fi
     if [[ -z "${SNI:-}" ]]; then SNI="bing.com"; fi
     if ! validate_domain "$SNI"; then
         echo "警告: SNI 格式无效，使用默认 bing.com"; SNI="bing.com"
@@ -234,7 +262,7 @@ EOF
 "auth": "${HYSTERIA_PASSWORD}",
 "tls": {
   "sni": "$SNI",
-  "insecure": true
+  "insecure": ${HY2_USE_ACME:-0}
 },
 "quic": {
   "initStreamReceiveWindow": 26843545,
@@ -303,9 +331,8 @@ show_client_config() {
 
 # 主函数
 main() {
-    echo "Hysteria2 一键安装脚本"
-    echo "支持的系统: Ubuntu/Debian/CentOS/RHEL/AlmaLinux/Rocky Linux/openSUSE/Arch Linux"
-    echo
+    banner
+    echo -e "支持的系统: Ubuntu/Debian/CentOS/RHEL/AlmaLinux/Rocky Linux/openSUSE/Arch Linux\n"
     
     install_hysteria2
     show_client_config

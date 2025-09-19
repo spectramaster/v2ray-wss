@@ -10,85 +10,26 @@ if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
     exit 1
 fi
 
-# ---------- Helpers ----------
-command_exists() { command -v "$1" >/dev/null 2>&1; }
+# ---------- UI & Helpers ----------
+# Load common helpers
+if [[ -z "${COMMON_LOADED:-}" ]]; then
+  if [[ -f "$(dirname "$0")/scripts/lib/common.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$(dirname "$0")/scripts/lib/common.sh"
+  else
+    # remote fallback
+    # shellcheck disable=SC1090
+    source <(curl -fsSL https://raw.githubusercontent.com/spectramaster/v2ray-wss/main/scripts/lib/common.sh)
+  fi
+fi
 
-base64_noline() {
-    if base64 --help 2>&1 | grep -q '\-w, \--wrap'; then
-        base64 -w 0
-    else
-        base64 | tr -d '\n'
-    fi
+banner() {
+    clear
+    echo -e "${CYAN}${BOLD}==============================================${RESET}"
+    echo -e "${CYAN}${BOLD}           V2Ray WebSocket 快速安装           ${RESET}"
+    echo -e "${CYAN}${BOLD}==============================================${RESET}"
 }
-
-get_ip() {
-    local ip=""
-    # Prefer IPv4; fallback IPv6
-    local sources_v4=(
-        "http://www.cloudflare.com/cdn-cgi/trace"
-        "https://api.ipify.org"
-        "https://ipinfo.io/ip"
-        "https://ipv4.icanhazip.com/"
-        "https://checkip.amazonaws.com"
-    )
-    for src in "${sources_v4[@]}"; do
-        if [[ "$src" == *cloudflare* ]]; then
-            ip=$(curl -fsS4 --connect-timeout 10 --max-time 15 "$src" | awk -F'=' '/^ip=/{print $2}' | tr -d '\r\n' || true)
-        else
-            ip=$(curl -fsS4 --connect-timeout 10 --max-time 15 "$src" | tr -d '\r\n' || true)
-        fi
-        [[ -n "$ip" ]] && break || true
-    done
-    if [[ -z "$ip" ]]; then
-        ip=$(curl -fsS6 --connect-timeout 10 --max-time 15 "http://www.cloudflare.com/cdn-cgi/trace" | awk -F'=' '/^ip=/{print $2}' | tr -d '\r\n' || true)
-    fi
-    echo "${ip}"
-}
-
-is_port_in_use() {
-    local port="$1"
-    if command_exists ss; then
-        ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE ":${port}$"
-    elif command_exists netstat; then
-        netstat -lnt 2>/dev/null | awk '{print $4}' | grep -qE ":${port}$"
-    elif command_exists lsof; then
-        lsof -iTCP -sTCP:LISTEN -nP 2>/dev/null | grep -q ":${port}"
-    else
-        return 1
-    fi
-}
-
-choose_free_port() {
-    local try=0 port
-    while (( try < 30 )); do
-        port=$(shuf -i 2000-65000 -n 1)
-        if ! is_port_in_use "$port"; then
-            echo "$port"
-            return 0
-        fi
-        ((try++))
-    done
-    # fallback
-    echo 33445
-}
-
-gen_uuid() {
-    if [[ -r /proc/sys/kernel/random/uuid ]]; then
-        cat /proc/sys/kernel/random/uuid
-    elif command_exists uuidgen; then
-        uuidgen
-    else
-        date +%s%N | md5sum | awk '{print $1"-0000-4000-8000-"substr($1,1,12)}'
-    fi
-}
-
-rand_path() {
-    if command_exists openssl; then
-        openssl rand -hex 8
-    else
-        head -c 16 /dev/urandom | md5sum | head -c 12
-    fi
-}
+get_ip() { get_server_ip; }
 
 install_update() { 
     if command_exists apt-get; then
@@ -108,7 +49,8 @@ install_update() {
 
 install_v2ray(){
     mkdir -p /usr/local/etc/v2ray
-    curl -fsSL https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh | bash
+    local url="${V2RAY_INSTALL_URL:-https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh}"
+    curl -fsSL "$url" | bash
 
 cat >/usr/local/etc/v2ray/config.json<<EOF
 {
@@ -137,7 +79,13 @@ EOF
 
     systemctl daemon-reload
     systemctl enable v2ray.service
+    # Validate config before restart
+    if ! test_v2ray_config "/usr/local/etc/v2ray/config.json"; then
+        echo -e "${CROSS} v2ray 配置验证失败" >&2
+    fi
     systemctl restart v2ray.service
+    ensure_service_active v2ray.service "v2ray" || true
+    ensure_service_active v2ray.service "v2ray" || true
 
     # Save human-readable client info
 cat >/usr/local/etc/v2ray/client.txt<<EOF
@@ -160,10 +108,9 @@ client_v2ray(){
         "$v2port" "$v2uuid" "$SERVER_IP" "$v2path")
     wslink=$(echo -n "$link_json" | base64_noline)
 
-    echo
-    echo "安装已经完成"
-    echo
-    echo "=========== v2ray 配置参数 ============"
+    banner
+    echo -e "${GREEN}安装已经完成${RESET}\n"
+    echo -e "${BOLD}=========== V2Ray 配置参数 ============${RESET}"
     echo "协议：VMess"
     echo "地址：${SERVER_IP}"
     echo "端口：${v2port}"
@@ -172,9 +119,8 @@ client_v2ray(){
     echo "传输协议：ws"
     echo "路径：/${v2path}"
     echo "注意：不需要打开 TLS"
-    echo "======================================"
-    echo "vmess://${wslink}"
-    echo
+    echo -e "${BOLD}======================================${RESET}"
+    echo -e "连接链接：\nvmess://${wslink}\n"
 }
 
 # ---------- Main ----------
